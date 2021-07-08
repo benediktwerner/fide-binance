@@ -69,11 +69,11 @@ ADAPTER = HTTPAdapter(max_retries=RETRY_STRAT)
 
 log = logging.getLogger("pair")
 log.setLevel(logging.DEBUG)
-format_string = "%(asctime)s | %(levelname)-8s | %(message)s"
 
 req_log = logging.getLogger('urllib3')
 req_log.setLevel(logging.WARN)
-req_log.addHandler(log)
+
+format_string = "%(asctime)s | %(levelname)-8s | %(message)s"
 
 # 12_500_000 bytes = 12.5Mb
 handler = logging.handlers.RotatingFileHandler(
@@ -81,14 +81,14 @@ handler = logging.handlers.RotatingFileHandler(
 )
 handler.setFormatter(logging.Formatter(format_string))
 handler.setLevel(logging.DEBUG)
-log.addHandler(handler)
+logging.getLogger().addHandler(handler)
 
 handler_2 = logging.StreamHandler(sys.stdout)
 handler_2.setFormatter(logging.Formatter(format_string))
 handler_2.setLevel(logging.INFO)
 if __debug__:
     handler_2.setLevel(logging.DEBUG)
-log.addHandler(handler_2)
+logging.getLogger().addHandler(handler_2)
 
 ###########
 # Classes #
