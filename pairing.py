@@ -7,6 +7,7 @@ Script making the pairings for FIDE binance tournament
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import logging.handlers
@@ -40,8 +41,17 @@ PLAYER_REGEX = re.compile(
     + r"\s+\d+"
 )
 
-G_DOC_PATH = "round_{}.txt"
-LOG_PATH = "pair.log"
+CHALLENGE_SETTINGS = {
+    "rated": "true",
+    "clock.limit": 600,
+    "clock.increment": 2,
+    "color": "white",
+    "message": "FIDE Binance: Your game with {opponent} is ready: {game}",
+}
+
+CSV_DELIM = ";"
+
+LOG_PATH = "out.log"
 
 BASE = "http://localhost:9663" if __debug__ else "https://lichess.org"
 PAIRING_API = BASE + "/api/challenge/admin/{}/{}"
@@ -242,9 +252,9 @@ class FileHandler:
     def __init__(self: FileHandler, db: Optional[Db] = None) -> None:
         self.db = Db() if db is None else db
 
-    def get_pairing(self: FileHandler, round_nb: int) -> List[Pair]:
+    def __read_pairings_txt(self: FileHandler, path: str) -> List[Pair]:
         pairs: List[Pair] = []
-        with open(G_DOC_PATH.format(round_nb)) as f:
+        with open(path) as f:
             for line in (line.strip() for line in f if line.strip()):
                 match = PLAYER_REGEX.match(line)
                 if match is None:
@@ -262,11 +272,33 @@ class FileHandler:
                 pairs.append(pair)
         return pairs
 
-    def fetch(self: FileHandler, round_nb: int) -> None:
-        pairs = self.get_pairing(round_nb)
+    def __read_pairings_csv(self: FileHandler, path: str) -> List[Pair]:
+        pairs: List[Pair] = []
+        with open(path, newline="") as f:
+            reader = csv.reader(f, delimiter=CSV_DELIM)
+            for row in reader:
+                log.debug(row)
+                table_number, player1, player2 = row
+                if int(table_number) % 2:  # odd numbers have white player on left
+                    pair = Pair(white_player=player1, black_player=player2)
+                else:
+                    pair = Pair(white_player=player2, black_player=player1)
+                log.debug(pair)
+                pairs.append(pair)
+        return pairs
+
+    def insert(self: FileHandler, round_nb: int, path: str) -> None:
+        if path.endswith(".txt"):
+            pairs = self.__read_pairings_txt(path)
+        elif path.endswith(".csv"):
+            pairs = self.__read_pairings_csv(path)
+        else:
+            return log.error(f"Unsupported pairings file: {path}. Must be .txt or .csv")
+
         for pair in pairs:
             self.db.add_players(pair, round_nb)
-        log.info(f"Round {round_nb}: {len(pairs)} pairings created")
+
+        log.info(f"Round {round_nb}: {len(pairs)} pairings inserted")
 
 
 @dataclass
@@ -293,14 +325,7 @@ class Pairing:
     def create_game(self: Pairing, pair: Pair) -> str:
         """Returns the lichess game id of the game created"""
         url = PAIRING_API.format(pair.white_player, pair.black_player)
-        payload = {
-            "rated": "true",
-            "clock.limit": 600,
-            "clock.increment": 2,
-            "color": "white",
-            "message": "FIDE Binance: Your game with {opponent} is ready: {game}",
-        }
-        r = self.http.post(url, data=payload, headers=HEADERS).json()
+        r = self.http.post(url, data=CHALLENGE_SETTINGS, headers=HEADERS).json()
         log.debug(r)
         return r["game"]["id"]
 
@@ -365,10 +390,10 @@ def test() -> None:
     Pairing().test()
 
 
-def fetch(round_nb: int) -> None:
-    """Takes the raw dump from the `G_DOC_PATH` copied document and store the pairings in the db, without launching the challenges"""
-    log.debug(f"cmd: fetch {round_nb}")
-    FileHandler().fetch(round_nb)
+def insert(round_nb: int, path: str) -> None:
+    """Store pairings from a .txt or .csv file in the db, without launching the challenges"""
+    log.debug(f"cmd: fetch {round_nb} {path}")
+    FileHandler().insert(round_nb, path)
 
 
 def pair(round_nb: int) -> None:
@@ -392,7 +417,7 @@ def broadcast(round_nb: int) -> None:
 
 
 def reset(round_nb: int, force=False) -> None:
-    """Reset a round by removing all its pairings"""
+    """Reset a round by removing all its pairings. Use `force` to remove pairings with created games."""
     log.debug(f"cmd: reset {round_nb} force={force}")
     Db().remove_round(round_nb, force)
 
@@ -407,7 +432,7 @@ def main() -> None:
         "test": test,
     }
     ROUND_COMMANDS = {
-        "fetch": fetch,
+        "insert": insert,
         "pair": pair,
         "result": result,
         "broadcast": broadcast,
@@ -429,13 +454,16 @@ def main() -> None:
             help="The round number related to the action you want to do",
         )
 
-    reset_parser = subparsers.choices["reset"]
-    reset_parser.add_argument(
+    subparsers.choices["insert"].add_argument(
+        "path", help="File to read pairings from (.txt or .csv)",
+    )
+
+    subparsers.choices["reset"].add_argument(
         "-f",
         "--force",
         dest="force",
         action="store_true",
-        help="Delete round even if games were already created",
+        help="Also delete pairings if their games were already created",
     )
 
     args = parser.parse_args()
