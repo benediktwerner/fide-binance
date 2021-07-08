@@ -1,0 +1,8 @@
+.env
+*.log
+*.1
+*.2
+*.3
+*.db
+/venv
+sample.txt
