@@ -288,6 +288,7 @@ class Pairing:
             "clock.limit": 600,
             "clock.increment": 2,
             "color": "white",
+            "message": "FIDE Binance: Your game with {opponent} is ready: {game}"
         }
         r = self.http.post(url, data=payload, headers=HEADERS).json()
         log.debug(r)
