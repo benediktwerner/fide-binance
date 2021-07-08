@@ -153,6 +153,15 @@ class Db:
             for row in rows:
                 log.info(f"    {row}")
 
+    def remove_round(self: Db, round_nb: int, force=False) -> None:
+        force_select = "" if force else "AND lichess_game_id is NULL"
+        self.cur.execute(
+            f"""DELETE FROM rounds
+                WHERE round_nb = ? {force_select}
+            """,
+            (round_nb,),
+        )
+
     def add_players(self: Db, pair: Pair, round_nb: int) -> None:
         self.cur.execute(
             """INSERT INTO rounds (
@@ -358,33 +367,39 @@ def test() -> None:
 
 def fetch(round_nb: int) -> None:
     """Takes the raw dump from the `G_DOC_PATH` copied document and store the pairings in the db, without launching the challenges"""
-    log.debug("cmd: fetch")
+    log.debug(f"cmd: fetch {round_nb}")
     FileHandler().fetch(round_nb)
 
 
 def pair(round_nb: int) -> None:
     """Create a challenge for every couple of players that has not been already paired"""
-    log.debug("cmd: pair")
+    log.debug(f"cmd: pair {round_nb}")
     Pairing().pair_all_players(round_nb)
 
 
 def result(round_nb: int) -> None:
     """Fetch all games from that round_nb, check if they are finished, and print the results"""
-    log.debug("cmd: result")
+    log.debug(f"cmd: result {round_nb}")
     Pairing().check_all_results(round_nb)
 
 
 def broadcast(round_nb: int) -> None:
     """Return game ids of the round `round_nb` separated by a space"""
-    log.debug("cmd: broadcast")
+    log.debug(f"cmd: broadcast {round_nb}")
     game_ids = Db().get_game_ids(round_nb)
     log.info(f"Round {round_nb}: {len(game_ids)} games started")
     log.info(f"Game ids: {' '.join(game_ids)}")
 
 
+def reset(round_nb: int, force=False) -> None:
+    """Reset a round by removing all its pairings"""
+    log.debug(f"cmd: reset {round_nb} force={force}")
+    Db().remove_round(round_nb, force)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.set_defaults(func=lambda args: parser.print_usage())
+    parser.set_defaults(func=lambda **kwargs: parser.print_usage())
     subparsers = parser.add_subparsers()
     BASIC_COMMANDS = {
         "create_db": create_db,
@@ -396,21 +411,16 @@ def main() -> None:
         "pair": pair,
         "result": result,
         "broadcast": broadcast,
+        "reset": reset,
     }
-
-    def fix(fn, args_fn=None):
-        if args_fn is None:
-            return lambda args: fn()
-        else:
-            return lambda args: fn(args_fn(args))
 
     for name, fn in BASIC_COMMANDS.items():
         p = subparsers.add_parser(name, help=fn.__doc__)
-        p.set_defaults(func=fix(fn))
+        p.set_defaults(func=fn)
 
     for name, fn2 in ROUND_COMMANDS.items():
         p = subparsers.add_parser(name, help=fn2.__doc__)
-        p.set_defaults(func=fix(fn2, lambda args: args.round_nb))
+        p.set_defaults(func=fn2)
         p.add_argument(
             "round_nb",
             metavar="ROUND",
@@ -419,8 +429,21 @@ def main() -> None:
             help="The round number related to the action you want to do",
         )
 
+    reset_parser = subparsers.choices["reset"]
+    reset_parser.add_argument(
+        "-f",
+        "--force",
+        dest="force",
+        action="store_true",
+        help="Delete round even if games were already created",
+    )
+
     args = parser.parse_args()
-    args.func(args)
+    func = args.func
+    params = vars(args)
+    if "func" in params:
+        del params["func"]
+    func(**params)
 
 
 ########
