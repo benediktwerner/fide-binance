@@ -71,6 +71,10 @@ log = logging.getLogger("pair")
 log.setLevel(logging.DEBUG)
 format_string = "%(asctime)s | %(levelname)-8s | %(message)s"
 
+req_log = logging.getLogger('urllib3')
+req_log.setLevel(logging.WARN)
+req_log.addHandler(log)
+
 # 12_500_000 bytes = 12.5Mb
 handler = logging.handlers.RotatingFileHandler(
     LOG_PATH, maxBytes=12_500_000, backupCount=3, encoding="utf8"
