@@ -17,6 +17,7 @@ import re
 import sqlite3
 import sys
 
+from enum import IntEnum
 from argparse import RawTextHelpFormatter
 from dataclasses import dataclass
 from dotenv import load_dotenv
@@ -30,7 +31,14 @@ from typing import Dict, List, Optional, Tuple
 
 load_dotenv()
 
-PLAYER_REGEX = re.compile(r"^(\d+) +(\w+) +\d+.+ +(\w+) +\d+")
+PLAYER_REGEX = re.compile(
+    r"^(?P<table_number>\d+)"
+    + r"\s+"
+    + r"(?P<player1>\w+)"
+    + r"\s+.+\s+"
+    + r"(?P<player2>\w+)"
+    + r"\s+\d+"
+)
 
 G_DOC_PATH = "round_{}.txt"
 LOG_PATH = "pair.log"
@@ -41,7 +49,7 @@ if __debug__:
 PAIRING_API = BASE + "/api/challenge/admin/{}/{}"
 LOOKUP_API = BASE + "/games/export/_ids"
 
-API_KEY = {
+HEADERS = {
     "Authorization": f"Bearer {os.getenv('TOKEN')}",
     "Accept": "application/x-ndjson",
 }
@@ -83,12 +91,30 @@ log.addHandler(handler_2)
 ###########
 
 
+class GameResult(IntEnum):
+    BLACK_WINS = 0
+    WHITE_WINS = 1
+    DRAW = 2
+
+    @staticmethod
+    def from_game(game: Dict[str, str]) -> Optional[GameResult]:
+        winner = game.get("winner")
+        status = game["status"]
+        if winner == "white":
+            return GameResult.WHITE_WINS
+        elif winner == "black":
+            return GameResult.BLACK_WINS
+        elif winner is None and status == "draw" or status == "stalemate":
+            return GameResult.DRAW
+        return None
+
+
 class Db:
-    def __init__(self) -> None:
+    def __init__(self: Db) -> None:
         self.con = sqlite3.connect("FIDE_binance.db", isolation_level=None)
         self.cur = self.con.cursor()
 
-    def create_db(self) -> None:
+    def create_db(self: Db) -> None:
         # Since the event is divided in two parts, `round_nb` will first indicate the round_nb number in the round-robin then advancement in the knockdown event
         # `result` 0 = black wins, 1 = white wins, 2 = draw, 3 = unknown (everything else)
         # `rowId` is the primary key and is create silently
@@ -102,7 +128,7 @@ class Db:
                round_nb INT)"""
         )
 
-    def show(self) -> None:
+    def show(self: Db) -> None:
         tables = self.cur.execute(
             """SELECT name 
             FROM sqlite_master 
@@ -119,7 +145,7 @@ class Db:
             rows = self.cur.execute(f"SELECT * from {table}")
             log.info(f"{table} rows: {[t for t in rows]}")
 
-    def add_players(self, pair: Pair, round_nb: int) -> None:
+    def add_players(self: Db, pair: Pair, round_nb: int) -> None:
         self.cur.execute(
             """INSERT INTO rounds
             (
@@ -131,7 +157,7 @@ class Db:
             (pair.white_player, pair.black_player, round_nb),
         )
 
-    def get_unpaired_players(self, round_nb: int) -> List[Tuple[int, Pair]]:
+    def get_unpaired_players(self: Db, round_nb: int) -> List[Tuple[int, Pair]]:
         raw_data = list(
             self.cur.execute(
                 """SELECT 
@@ -150,7 +176,7 @@ class Db:
             for row_id, white_player, black_player in raw_data
         ]
 
-    def add_lichess_game_id(self, row_id: int, game_id: str) -> None:
+    def add_lichess_game_id(self: Db, row_id: int, game_id: str) -> None:
         self.cur.execute(
             """UPDATE rounds
                 SET lichess_game_id = ?
@@ -159,7 +185,7 @@ class Db:
             (game_id, row_id),
         )
 
-    def get_unfinished_games(self, round_nb: int) -> Dict[str, int]:
+    def get_unfinished_games(self: Db, round_nb: int) -> Dict[str, int]:
         raw_data = list(
             self.cur.execute(
                 """SELECT 
@@ -173,7 +199,7 @@ class Db:
         log.info(f"Round {round_nb}, {len(raw_data)} games unfinished")
         return {game_id: int(row_id) for row_id, game_id in raw_data}
 
-    def get_game_ids(self, round_nb: int) -> str:
+    def get_game_ids(self: Db, round_nb: int) -> str:
         raw_data = list(
             self.cur.execute(
                 """SELECT 
@@ -188,7 +214,7 @@ class Db:
         log.debug(raw_data)
         return " ".join((x[0] for x in raw_data))
 
-    def add_game_result(self, row_id: int, result: int) -> None:
+    def add_game_result(self: Db, row_id: int, result: GameResult) -> None:
         self.cur.execute(
             """UPDATE rounds
                 SET result = ?
@@ -199,27 +225,30 @@ class Db:
 
 
 class FileHandler:
-    def __init__(self, db: Db) -> None:
+    def __init__(self: FileHandler, db: Db) -> None:
         self.db = db
 
-    def get_pairing(self, round_nb: int) -> List[Pair]:
-        l: List[Pair] = []
-        with open(G_DOC_PATH.format(round_nb)) as input_:
-            for line in input_:
+    def get_pairing(self: FileHandler, round_nb: int) -> List[Pair]:
+        pairs: List[Pair] = []
+        with open(G_DOC_PATH.format(round_nb)) as f:
+            for line in (line.strip() for line in f if line.strip()):
                 match = PLAYER_REGEX.match(line)
                 if match is None:
+                    log.warn(f"Failed to line: {line}")
                     continue
                 log.debug(match.groups())
-                (table_number, player_1, player_2) = match.groups()
+                table_number = int(match.group("table_number"))
+                player1 = match.group("player1")
+                player2 = match.group("player2")
                 if int(table_number) % 2:  # odd numbers have white player on left
-                    pair = Pair(white_player=player_1, black_player=player_2)
+                    pair = Pair(white_player=player1, black_player=player2)
                 else:
-                    pair = Pair(white_player=player_2, black_player=player_1)
+                    pair = Pair(white_player=player2, black_player=player1)
                 log.debug(pair)
-                l.append(pair)
-        return l
+                pairs.append(pair)
+        return pairs
 
-    def fetch(self, round_nb: int) -> None:
+    def fetch(self: FileHandler, round_nb: int) -> None:
         for pair in self.get_pairing(round_nb):
             self.db.add_players(pair, round_nb)
 
@@ -231,23 +260,23 @@ class Pair:
 
 
 class Pairing:
-    def __init__(self, db: Db) -> None:
+    def __init__(self: Pairing, db: Db) -> None:
         self.db = db
         self.http = requests.Session()
         self.http.mount("https://", ADAPTER)
         self.http.mount("http://", ADAPTER)
         self.dep = time.time()
 
-    def tl(self) -> float:
+    def tl(self: Pairing) -> float:
         """time elapsed"""
         return time.time() - self.dep
 
-    def pair_all_players(self, round_nb: int) -> None:
+    def pair_all_players(self: Pairing, round_nb: int) -> None:
         for row_id, pair in self.db.get_unpaired_players(round_nb):
             game_id = self.create_game(pair)
             self.db.add_lichess_game_id(row_id, game_id)
 
-    def create_game(self, pair: Pair) -> str:
+    def create_game(self: Pairing, pair: Pair) -> str:
         """Return the lichess game id of the game created"""
         url = PAIRING_API.format(pair.white_player, pair.black_player)
         payload = {
@@ -256,17 +285,17 @@ class Pairing:
             "clock.increment": 2,
             "color": "white",
         }
-        r = self.http.post(url, data=payload, headers=API_KEY).json()
+        r = self.http.post(url, data=payload, headers=HEADERS).json()
         log.debug(r)
         return r["game"]["id"]
 
-    def check_all_results(self, round_nb: int) -> None:
+    def check_all_results(self: Pairing, round_nb: int) -> None:
         games_dic = self.db.get_unfinished_games(round_nb)
         # Not streaming since at most 128 games so ~6s and it avoid parsing ndjson.
         r = self.http.post(
             LOOKUP_API,
             data=",".join(games_dic.keys()),
-            headers=API_KEY,
+            headers=HEADERS,
             params={"moves": "false"},
         )
         games = r.text.splitlines()
@@ -274,30 +303,19 @@ class Pairing:
         for raw_game in games:
             log.debug(raw_game)
             game = json.loads(raw_game)
-            result = self.return_result_int(game)
+            result = GameResult.from_game(game)
             id_ = game["id"]
             log.info(f"Game {id_}, result: {result}")
             if result is not None:
                 self.db.add_game_result(id_, result)
 
-    def return_result_int(self, game: Dict[str, str]) -> Optional[int]:
-        winner = game.get("winner")
-        status = game["status"]
-        if winner == "white":
-            return 1
-        elif winner == "black":
-            return 0
-        elif winner is None and status == "draw" or status == "stalemate":
-            return 2
-        return None
-
-    def test(self):
+    def test(self: Pairing):
         games_id = ["11tHUbnm", "ETSYCv5R", "KVPzep34", "uXxcDewp"]
         # Not streaming since at most 128 games so ~6s and it avoid parsing ndjson.
         r = self.http.post(
             LOOKUP_API,
             data=",".join(games_id),
-            headers=API_KEY,
+            headers=HEADERS,
             params={"moves": "false"},
         )
         games = r.text.splitlines()
@@ -305,7 +323,7 @@ class Pairing:
         for raw_game in games:
             log.debug(raw_game)
             game = json.loads(raw_game)
-            result = self.return_result_int(game)
+            result = GameResult.from_game(game)
             id_ = game["id"]
             log.info(f"Game {id_}, result: {result}")
 
@@ -329,7 +347,6 @@ def show() -> None:
 
 def test() -> None:
     db = Db()
-    f = FileHandler(db)
     p = Pairing(db)
     p.test()
 
