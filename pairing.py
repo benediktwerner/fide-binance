@@ -397,13 +397,19 @@ def main() -> None:
         "broadcast": broadcast,
     }
 
+    def fix(fn, args_fn=None):
+        if args_fn is None:
+            return lambda args: fn()
+        else:
+            return lambda args: fn(args_fn(args))
+
     for name, fn in BASIC_COMMANDS.items():
         p = subparsers.add_parser(name, help=fn.__doc__)
-        p.set_defaults(func=lambda args: fn())
+        p.set_defaults(func=fix(fn))
 
     for name, fn2 in ROUND_COMMANDS.items():
         p = subparsers.add_parser(name, help=fn2.__doc__)
-        p.set_defaults(func=lambda args: fn2(args.round_nb))
+        p.set_defaults(func=fix(fn2, lambda args: args.round_nb))
         p.add_argument(
             "round_nb",
             metavar="ROUND",
