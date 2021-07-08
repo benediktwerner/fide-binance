@@ -4,5 +4,6 @@
 *.2
 *.3
 *.db
+round_*.txt
 /venv
 sample.txt
