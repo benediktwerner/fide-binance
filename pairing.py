@@ -41,20 +41,21 @@ PLAYER_REGEX = re.compile(
     + r"\s+\d+"
 )
 
-CHALLENGE_SETTINGS = {
+GAME_SETTINGS = {
     "rated": "true",
     "clock.limit": 600,
     "clock.increment": 2,
-    "color": "white",
     "message": "FIDE Binance: Your game with {opponent} is ready: {game}",
 }
 
 CSV_DELIM = ";"
+TOKENS_PATH = "tokens.txt"
 
 LOG_PATH = "out.log"
 
 BASE = "http://localhost:9663" if __debug__ else "https://lichess.org"
-PAIRING_API = BASE + "/api/challenge/admin/{}/{}"
+PAIRING_API = BASE + "/api/bulk-pairing"
+START_CLOCKS_API = BASE + "/api/bulk-pairing/{}/start-clocks"
 LOOKUP_API = BASE + "/games/export/_ids"
 DB_FILE = "FIDE_binance_test.db" if __debug__ else "FIDE_binance_prod.db"
 
@@ -137,7 +138,8 @@ class Db:
                 black_player description VARCHAR(30) NOT NULL, 
                 lichess_game_id CHAR(8), 
                 result INT,
-                round_nb INT
+                round_nb INT,
+                bulk_id CHAR(8)
             )"""
         )
 
@@ -171,6 +173,21 @@ class Db:
             """,
             (round_nb,),
         )
+        leftover = len(
+            list(
+                self.cur.execute(
+                    """SELECT 1
+                   FROM rounds
+                   WHERE round_nb = ?
+                """,
+                    (round_nb,),
+                )
+            )
+        )
+        if leftover > 0:
+            log.info(f"Round {round_nb}: {leftover} remaining pairings")
+        else:
+            log.info(f"Round {round_nb}: Removed all pairings")
 
     def add_players(self: Db, pair: Pair, round_nb: int) -> None:
         self.cur.execute(
@@ -183,11 +200,10 @@ class Db:
             (pair.white_player, pair.black_player, round_nb),
         )
 
-    def get_unpaired_players(self: Db, round_nb: int) -> List[Tuple[int, Pair]]:
+    def get_unpaired_players(self: Db, round_nb: int) -> List[Pair]:
         raw_data = list(
             self.cur.execute(
                 """SELECT 
-                    rowId, 
                     white_player,
                     black_player
                    FROM rounds
@@ -197,17 +213,17 @@ class Db:
             )
         )
         return [
-            (int(row_id), Pair(white_player, black_player))
-            for row_id, white_player, black_player in raw_data
+            Pair(white_player, black_player) for white_player, black_player in raw_data
         ]
 
-    def add_lichess_game_id(self: Db, row_id: int, game_id: str) -> None:
-        self.cur.execute(
+    def add_lichess_games(self: Db, bulk_id: str, games: List[Dict[str, str]]) -> None:
+        self.cur.executemany(
             """UPDATE rounds
-                SET lichess_game_id = ?
-                WHERE rowId = ?
+                SET bulk_id = ?, lichess_game_id = ?
+                WHERE white_player = ?
+                AND black_player = ?
             """,
-            (game_id, row_id),
+            [(bulk_id, game["id"], game["white"], game["black"]) for game in games],
         )
 
     def get_unfinished_games(self: Db, round_nb: int) -> List[str]:
@@ -307,27 +323,74 @@ class Pair:
     black_player: str
 
 
+def check_response(response, error_msg: str) -> bool:
+    # Print status
+    if not response.ok:
+        log.error(error_msg)
+        try:
+            log.error(f"JSON response: {response.json()}")
+        except Exception:
+            log.error(f"Text response: {response.text}")
+        return False
+    return True
+
+
+class Tokens:
+    def __init__(self: Tokens):
+        self.tokens: Dict[str, str] = {}
+        with open(TOKENS_PATH) as f:
+            for line in f:
+                name, token = (x.strip() for x in line.split(":"))
+                self.tokens[name] = token
+
+    def get_tokens(self: Tokens, pair: Pair) -> Optional[str]:
+        t1 = self.tokens.get(pair.white_player)
+        t2 = self.tokens.get(pair.black_player)
+        if t1 is None:
+            log.error(f"No token for: {pair.white_player}")
+            return None
+        if t2 is None:
+            log.error(f"No token for: {pair.black_player}")
+            return None
+        return f"{t1}:{t2}"
+
+
 class Pairing:
     def __init__(self: Pairing, db: Optional[Db] = None) -> None:
         self.db = Db() if db is None else db
         self.http = requests.Session()
         self.http.mount("https://", ADAPTER)
         self.http.mount("http://", ADAPTER)
-        self.dep = time.time()
 
     def pair_all_players(self: Pairing, round_nb: int) -> None:
         unpaired = self.db.get_unpaired_players(round_nb)
         log.info(f"Round {round_nb}: {len(unpaired)} games to be created")
-        for row_id, pair in unpaired:
-            game_id = self.create_game(pair)
-            self.db.add_lichess_game_id(row_id, game_id)
 
-    def create_game(self: Pairing, pair: Pair) -> str:
-        """Returns the lichess game id of the game created"""
-        url = PAIRING_API.format(pair.white_player, pair.black_player)
-        r = self.http.post(url, data=CHALLENGE_SETTINGS, headers=HEADERS).json()
+        tokens = Tokens()
+        players = [tokens.get_tokens(pair) for pair in unpaired]
+
+        if any(x is None for x in players):
+            return
+
+        now = int(time.time()) * 1000
+        data = GAME_SETTINGS.copy()
+        data["players"] = players
+        data["pairAt"] = now
+        data["startClocksAt"] = now + 60 * 1000
+        rep = self.http.post(PAIRING_API, data=data, headers=HEADERS)
+
+        if not check_response(rep, "Failed to create games"):
+            return
+
+        r = rep.json()
         log.debug(r)
-        return r["game"]["id"]
+        self.db.add_lichess_games(r["id"], r["games"])
+
+    # def start_clocks(self: Pairing, round_nb: int) -> None:
+    #     games = self.db.get_unfinished_games(round_nb)
+    #     for gameId in games:
+    #         rep = self.http.post(START_CLOCKS_API.format(gameId), headers=HEADERS)
+    #         check_response(rep, f"Failed to start clocks for: {gameId}")
 
     def check_all_results(self: Pairing, round_nb: int) -> None:
         games = self.db.get_unfinished_games(round_nb)
@@ -339,6 +402,8 @@ class Pairing:
             headers=HEADERS,
             params={"moves": "false"},
         )
+        if not check_response(r, "Failed to read games"):
+            return
         games = r.text.splitlines()
         log.debug(games)
         for raw_game in games:
@@ -402,6 +467,12 @@ def pair(round_nb: int) -> None:
     Pairing().pair_all_players(round_nb)
 
 
+# def start(round_nb: int) -> None:
+#     """Start the clock of all games fo the round"""
+#     log.debug(f"cmd: start {round_nb}")
+#     Pairing().start_clocks(round_nb)
+
+
 def result(round_nb: int) -> None:
     """Fetch all games from that round_nb, check if they are finished, and print the results"""
     log.debug(f"cmd: result {round_nb}")
@@ -437,6 +508,7 @@ def main() -> None:
         "result": result,
         "broadcast": broadcast,
         "reset": reset,
+        # "start": start,
     }
 
     for name, fn in BASIC_COMMANDS.items():
