@@ -503,7 +503,7 @@ class Pairing:
 
         bulk_id: str = r["id"]
         games = [
-            Game(round_nb, Pair(game["white"], game["black"]), game["game_id"], bulk_id)
+            Game(round_nb, Pair(game["white"], game["black"]), game["id"], bulk_id)
             for game in r["games"]
         ]
 
