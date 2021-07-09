@@ -512,8 +512,8 @@ class Pairing:
         log.info(f"Created {len(games)} games")
         log.info(f"Total games in round: {len(self.db.get_game_ids(round_nb))}")
 
-    def create_game(self: Pairing, pair: Pair) -> Optional[Tuple[str, str, str]]:
-        """Returns (lichess game id, white, black) or None on failure"""
+    def create_game(self: Pairing, pair: Pair) -> Optional[str]:
+        """Returns the lichess game on success or None on failure"""
         # tokens = self.tokens.get_tokens(pair)
         # if tokens is None:
         #     return None
@@ -533,23 +533,16 @@ class Pairing:
 
         r = rep.json()
         log.debug(r)
-        return (r["game"]["id"], r["challenger"]["id"], r["destUser"]["id"])
+        return r["game"]["id"]
 
     def create_games_single(self: Pairing, round_nb: int) -> None:
         unpaired = self.db.get_unpaired_players(round_nb)
         log.info(f"Round {round_nb}: {len(unpaired)} games to be created")
 
         for pair in unpaired:
-            result = self.create_game(pair)
-            if result is None:
+            game_id = self.create_game(pair)
+            if game_id is None:
                 continue
-            game_id, white, black = result
-            if white != pair.white_player or black != pair.black_player:
-                log.error(f"Round {round_nb}: Challenge was created incorrectly")
-                log.error(f"Wanted: {pair}")
-                log.error(f"Got: {white} vs {black} ({game_id})")
-                log.error("Aborting")
-                return
             self.db.add_lichess_game(Game(round_nb, pair, game_id))
 
         log.info(f"Created {len(unpaired)} games")
