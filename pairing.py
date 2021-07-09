@@ -365,14 +365,17 @@ class Pairing:
         log.info(f"Round {round_nb}: {len(unpaired)} games to be created")
 
         tokens = Tokens()
-        players = [tokens.get_tokens(pair) for pair in unpaired]
+        players = []
 
-        if any(x is None for x in players):
-            return
+        for pair in unpaired:
+            token_pair = tokens.get_tokens(pair)
+            if token_pair is None:
+                return
+            players.append(token_pair)
 
         now = int(time.time()) * 1000
         data = GAME_SETTINGS.copy()
-        data["players"] = players
+        data["players"] = ",".join(players)
         data["pairAt"] = now
         data["startClocksAt"] = now + 60 * 1000
         rep = self.http.post(PAIRING_API, data=data, headers=HEADERS)
