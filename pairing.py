@@ -133,6 +133,7 @@ class GameResult(IntEnum):
     BLACK_WINS = 0
     WHITE_WINS = 1
     DRAW = 2
+    ABORTED = 3
 
     @staticmethod
     def from_game(game: Dict[str, str]) -> Optional[GameResult]:
@@ -144,6 +145,8 @@ class GameResult(IntEnum):
             return GameResult.BLACK_WINS
         elif winner is None and status == "draw" or status == "stalemate":
             return GameResult.DRAW
+        elif status not in ("created", "started"):
+            return GameResult.ABORTED
         return None
 
 
