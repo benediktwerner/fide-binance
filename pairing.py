@@ -322,7 +322,6 @@ class Pair:
 
 
 def check_response(response, error_msg: str) -> bool:
-    # Print status
     if not response.ok:
         log.error(error_msg)
         try:
