@@ -276,7 +276,7 @@ class FileHandler:
             for line in (line.strip() for line in f if line.strip()):
                 match = PLAYER_REGEX.match(line)
                 if match is None:
-                    log.warn(f"Failed to match line: {line}")
+                    log.warning(f"Failed to match line: {line}")
                     continue
                 log.debug(match.groups())
                 table_number = int(match.group("table_number"))
