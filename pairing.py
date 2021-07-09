@@ -165,6 +165,7 @@ class Db:
                 black_player description VARCHAR(30) NOT NULL, 
                 lichess_game_id CHAR(8), 
                 result INT,
+                status VARCHAR(30),
                 round_nb INT,
                 bulk_id CHAR(8)
             )"""
@@ -200,6 +201,7 @@ class Db:
                     black_player,
                     lichess_game_id,
                     result,
+                    status,
                     bulk_id
                    FROM rounds
                    WHERE round_nb = ?
@@ -207,16 +209,24 @@ class Db:
             (round_nb,),
         )
         log.info(f"No  |DB Row{'White':>30} vs {'Black':30} Game Id  Bulk Id  State")
-        for i, (rowId, white, black, game_id, result, bulk_id) in enumerate(raw_data):
+        for i, (rowId, white, black, game_id, result, status, bulk_id) in enumerate(
+            raw_data
+        ):
             if game_id is None:
-                state = "Not created"
-            elif result is None:
-                state = "Started"
-            else:
-                state = ["Black wins 0-1", "White wins 1-0", "Draw       ½-½"][result]
+                status = "Not created"
+            elif result is not None:
+                result_txt = [
+                    "Black wins 0-1",
+                    "White wins 1-0",
+                    "Draw       ½-½",
+                    "Aborted",
+                ][result]
+                status = f"{status:<12}{result_txt}"
             game_id = game_id or "--------"
             bulk_id = bulk_id or "--------"
-            log.info(f"{i:>4}|{rowId:<5} {white:>30} vs {black:30} {game_id} {bulk_id} {state}")
+            log.info(
+                f"{i+1:>4}|{rowId:<5} {white:>30} vs {black:30} {game_id} {bulk_id} {status}"
+            )
 
     def remove_round(self: Db, round_nb: int, force=False) -> None:
         force_select = "" if force else "AND lichess_game_id is NULL"
@@ -286,7 +296,8 @@ class Db:
             """UPDATE rounds SET
                 bulk_id = ?,
                 lichess_game_id = ?,
-                result = NULL
+                result = NULL,
+                status = "created"
                WHERE white_player = ?
                AND black_player = ?
                AND round_nb = ?
@@ -305,7 +316,8 @@ class Db:
             """UPDATE rounds SET
                 bulk_id = ?,
                 lichess_game_id = ?,
-                result = NULL
+                result = NULL,
+                status = "created"
                WHERE white_player = ?
                AND black_player = ?
                AND round_nb = ?
@@ -352,13 +364,16 @@ class Db:
         )
         return [x[0] for x in raw_data]
 
-    def add_game_result(self: Db, game_id: str, result: GameResult) -> None:
+    def update_game_status(
+        self: Db, game_id: str, status: str, result: Optional[GameResult]
+    ) -> None:
         self.cur.execute(
-            """UPDATE rounds
-                SET result = ?
-                WHERE lichess_game_id = ?
+            """UPDATE rounds SET
+                result = ?,
+                status = ?
+               WHERE lichess_game_id = ?
             """,
-            (result, game_id),
+            (result, status, game_id),
         )
 
 
@@ -590,12 +605,7 @@ class Pairing:
             log.debug(raw_game)
             game = json.loads(raw_game)
             result = GameResult.from_game(game)
-            game_id = game["id"]
-            white = game["players"]["white"]["user"]["name"]
-            black = game["players"]["black"]["user"]["name"]
-            log.info(f"Game {game_id} - {white:>30} vs {black:30}: {result!s}")
-            if result is not None:
-                self.db.add_game_result(game_id, result)
+            self.db.update_game_status(game["id"], game["status"], result)
 
         still_unfinished = len(self.db.get_unfinished_games(round_nb))
         log.info(f"Round {round_nb}: {still_unfinished} games still unfinished")
