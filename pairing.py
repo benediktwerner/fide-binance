@@ -411,7 +411,9 @@ class Pairing:
             game = json.loads(raw_game)
             result = GameResult.from_game(game)
             id_ = game["id"]
-            log.info(f"Game {id_}: {result!s}")
+            white = game["players"]["white"]["user"]["name"]
+            black = game["players"]["black"]["user"]["name"]
+            log.info(f"Game {id_} - {white} vs {black}: {result!s}")
             if result is not None:
                 self.db.add_game_result(id_, result)
 
