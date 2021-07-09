@@ -675,7 +675,9 @@ def start_clocks(round_nb: int) -> None:
 def results(round_nb: int) -> None:
     """Fetch all games from that round_nb, check if they are finished, and print the results"""
     log.debug(f"cmd: results {round_nb}")
-    Pairing().fetch_results(round_nb)
+    p = Pairing()
+    p.fetch_results(round_nb)
+    p.db.show_round(round_nb)
 
 
 def broadcast(round_nb: int) -> None:
