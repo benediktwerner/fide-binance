@@ -292,7 +292,7 @@ class FileHandler:
             reader = csv.reader(f, delimiter=CSV_DELIM)
             for row in reader:
                 log.debug(row)
-                table_number, player1, player2 = row
+                table_number, _name1, _elo1, player1, _sep, _name2, _elo2, player2 = row
                 if int(table_number) % 2:  # odd numbers have white player on left
                     pair = Pair(white_player=player1, black_player=player2)
                 else:
