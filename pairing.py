@@ -217,7 +217,7 @@ class Db:
     def add_lichess_games(self: Db, bulk_id: str, games: List[Dict[str, str]]) -> None:
         self.cur.executemany(
             """UPDATE rounds
-                SET bulk_id = ?, lichess_game_id = ?
+                SET bulk_id = ?, lichess_game_id = ?, result = NULL
                 WHERE white_player = ?
                 AND black_player = ?
             """,
