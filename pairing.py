@@ -19,12 +19,10 @@ import sqlite3
 import sys
 
 from enum import IntEnum
-from argparse import RawTextHelpFormatter
-from dataclasses import dataclass
 from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 #############
 # Constants #
@@ -317,10 +315,10 @@ class FileHandler:
         log.info(f"Round {round_nb}: {len(pairs)} pairings inserted")
 
 
-@dataclass
 class Pair:
-    white_player: str
-    black_player: str
+    def __init__(self, white_player: str, black_player: str):
+        self.white_player = white_player.lower()
+        self.black_player = black_player.lower()
 
 
 def check_response(response, error_msg: str) -> bool:
