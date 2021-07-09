@@ -31,12 +31,14 @@ from typing import Dict, List, Optional
 load_dotenv()
 
 PLAYER_REGEX = re.compile(
-    r"^(?P<table_number>\d+)"
-    + r"\s+"
-    + r"(?P<player1>\w+)"
-    + r"\s+.+\s+"
-    + r"(?P<player2>\w+)"
-    + r"\s+\d+"
+    r"^(?P<table_number>\d+)\t"
+    + r"[^\t]+\t" # Name 1
+    + r"\d+\t" # Elo 1
+    + r"(?P<player1>[a-zA-Z0-9_-]+)\t"
+    + r"[^\t]+\t" # Score
+    + r"[^\t]+\t" # Name 2
+    + r"\d+\t" # Elo 2
+    + r"(?P<player2>[a-zA-Z0-9_-]+)"
 )
 
 GAME_SETTINGS = {
