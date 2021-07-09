@@ -417,6 +417,9 @@ class Pairing:
             if result is not None:
                 self.db.add_game_result(id_, result)
 
+        still_unfinished = len(self.db.get_unfinished_games(round_nb))
+        log.info(f"Round {round_nb}: {still_unfinished} games still unfinished")
+
     def test(self: Pairing):
         games_id = ["mPxblLH3", "Hu5hui7d", "KVPzep34", "uXxcDewp"]
         r = self.http.post(
