@@ -203,16 +203,17 @@ class Db:
                 """,
             (round_nb,),
         )
+        log.info(f"No  |DB Row{'White':>30} vs {'Black':30} Game Id  Bulk Id  State")
         for i, (rowId, white, black, game_id, result, bulk_id) in enumerate(raw_data):
             if game_id is None:
                 state = "Not created"
             elif result is None:
                 state = "Started"
             else:
-                state = ["Black wins", "White wins", "Draw"][result]
+                state = ["Black wins 0-1", "White wins 1-0", "Draw       ½-½"][result]
             game_id = game_id or "--------"
             bulk_id = bulk_id or "--------"
-            log.info(f"{i:>4}|{rowId:5} {white:>30} vs {black:30} {game_id}/{bulk_id} {state}")
+            log.info(f"{i:>4}|{rowId:<5} {white:>30} vs {black:30} {game_id} {bulk_id} {state}")
 
     def remove_round(self: Db, round_nb: int, force=False) -> None:
         force_select = "" if force else "AND lichess_game_id is NULL"
