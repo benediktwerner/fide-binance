@@ -43,7 +43,7 @@ GAME_SETTINGS = {
     "rated": "true",
     "clock.limit": 600,
     "clock.increment": 2,
-    "message": "FIDE Binance: Your game with {opponent} is ready: {game}",
+    "message": "FIDE Binance: Your game is ready: {game}",
 }
 
 CSV_DELIM = ";"
