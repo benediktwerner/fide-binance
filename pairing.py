@@ -48,6 +48,8 @@ GAME_SETTINGS = {
     "message": "FIDE Binance: Your game is ready: {game}",
 }
 
+START_CLOCKS_AFTER_SECS = 60
+
 CSV_DELIM = ";"
 TOKENS_PATH = "tokens.txt"
 
@@ -378,7 +380,8 @@ class Pairing:
         data = GAME_SETTINGS.copy()
         data["players"] = ",".join(players)
         data["pairAt"] = now
-        data["startClocksAt"] = now + 60 * 1000
+        if START_CLOCKS_AFTER_SECS is not None:
+            data["startClocksAt"] = now + START_CLOCKS_AFTER_SECS * 1000
         rep = self.http.post(PAIRING_API, data=data, headers=HEADERS)
 
         if not check_response(rep, "Failed to create games"):
