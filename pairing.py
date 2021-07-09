@@ -71,10 +71,10 @@ HEADERS = {
 }
 
 RETRY_STRAT = Retry(
-    total=5,
-    backoff_factor=5,
+    total=3,
+    backoff_factor=2,
     status_forcelist=[429, 500, 502, 503, 504],
-    allowed_methods=["GET"],
+    allowed_methods=["GET", "POST"],
 )
 ADAPTER = HTTPAdapter(max_retries=RETRY_STRAT)
 
