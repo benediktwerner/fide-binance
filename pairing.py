@@ -24,7 +24,7 @@ from enum import IntEnum
 from requests import Response
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional, Tuple
 
 #############
 # Constants #
@@ -192,7 +192,7 @@ class Db:
             log.info(f"'{table}' rows:")
             for row in rows:
                 log.info(f"    {row}")
-    
+
     def show_round(self: Db, round_nb: int) -> None:
         raw_data = self.cur.execute(
             """SELECT 
@@ -277,7 +277,7 @@ class Db:
             Pair(white_player, black_player) for white_player, black_player in raw_data
         ]
 
-    def get_unpaired_players(self: Db, round_nb: int) -> List[Pair]:
+    def get_uncreated_pairs(self: Db, round_nb: int) -> List[Pair]:
         raw_data = self.cur.execute(
             """SELECT 
                     white_player,
@@ -453,7 +453,9 @@ class FileHandler:
 def check_response(response: Response, error_msg: str) -> bool:
     if not response.ok:
         log.error(error_msg)
-        log.error(f"{response.request.method} {response.url} => {response.status_code} {response.reason}")
+        log.error(
+            f"{response.request.method} {response.url} => {response.status_code} {response.reason}"
+        )
         try:
             log.error(f"JSON response: {response.json()}")
         except Exception:
@@ -491,7 +493,7 @@ class Pairing:
         self.http.mount("http://", ADAPTER)
 
     def create_games_bulk(self: Pairing, round_nb: int) -> None:
-        unpaired = self.db.get_unpaired_players(round_nb)
+        unpaired = self.db.get_uncreated_pairs(round_nb)
         log.info(f"Round {round_nb}: {len(unpaired)} games to be created")
 
         players = []
@@ -551,7 +553,7 @@ class Pairing:
         return r["game"]["id"]
 
     def create_games_single(self: Pairing, round_nb: int) -> None:
-        unpaired = self.db.get_unpaired_players(round_nb)
+        unpaired = self.db.get_uncreated_pairs(round_nb)
         log.info(f"Round {round_nb}: {len(unpaired)} games to be created")
 
         for pair in unpaired:
@@ -564,6 +566,7 @@ class Pairing:
         log.info(f"Total games in round: {len(self.db.get_game_ids(round_nb))}")
 
     def start_clock(self: Pairing, game: Game) -> None:
+        log.debug(f"Starting clock for {game.game_id}")
         tokens = self.tokens.get_tokens(game.pair)
         if tokens is None:
             return
@@ -576,15 +579,18 @@ class Pairing:
 
     def start_clocks(self: Pairing, round_nb: int) -> None:
         games = self.db.get_unfinished_games(round_nb)
-        bulk_ids: Set[str] = set()
+        log.info(f"Round {round_nb}: Starting clock for {len(games)} games")
+
+        bulk_ids = set()
         for game in games:
             if game.bulk_id is not None:
-                bulk_ids.add(game.bulk_id)
+                bulk_ids.add(game.game_id)
             else:
                 self.start_clock(game)
 
-        for bulk in bulk_ids:
-            rep = self.http.post(BULK_START_CLOCKS_API.format(bulk), headers=HEADERS)
+        for bulk_id in bulk_ids:
+            log.debug(f"Bulk starting clocks for bulk {bulk_id}")
+            rep = self.http.post(BULK_START_CLOCKS_API.format(bulk_id), headers=HEADERS)
             check_response(rep, "Failed to bulk start clocks")
 
     def fetch_results(self: Pairing, round_nb: int) -> None:
@@ -600,7 +606,7 @@ class Pairing:
         if not check_response(rep, "Failed to read games"):
             return
         r = rep.text.splitlines()
-        log.debug(results)
+        log.debug(r)
         for raw_game in r:
             log.debug(raw_game)
             game = json.loads(raw_game)
@@ -629,6 +635,7 @@ def show_db() -> None:
     """Show the current state of the database. For debug purpose only"""
     log.debug("cmd: show_db")
     Db().show()
+
 
 def show(round_nb: int) -> None:
     """Show the state of the round"""
