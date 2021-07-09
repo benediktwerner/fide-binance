@@ -415,7 +415,7 @@ class Pairing:
             id_ = game["id"]
             white = game["players"]["white"]["user"]["name"]
             black = game["players"]["black"]["user"]["name"]
-            log.info(f"Game {id_} - {white} vs {black}: {result!s}")
+            log.info(f"Game {id_} - {white:>30} vs {black:30}: {result!s}")
             if result is not None:
                 self.db.add_game_result(id_, result)
 
