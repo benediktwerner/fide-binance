@@ -24,7 +24,7 @@ from enum import IntEnum
 from requests import Response
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Iterator
 
 #############
 # Constants #
@@ -111,14 +111,10 @@ logging.getLogger().addHandler(handler_2)
 ###########
 
 
-@dataclass
+@dataclass(frozen=True)
 class Pair:
     white_player: str
     black_player: str
-
-    def __init__(self: Pair, white_player: str, black_player: str):
-        self.white_player = white_player.lower()
-        self.black_player = black_player.lower()
 
 
 @dataclass
@@ -157,7 +153,7 @@ class Db:
 
     def create_db(self: Db) -> None:
         # Since the event is divided in two parts, `round_nb` will first indicate the round_nb number in the round-robin then advancement in the knockdown event
-        # `result` 0 = black wins, 1 = white wins, 2 = draw
+        # `result` 0 = black wins, 1 = white wins, 2 = draw, 3 = aborted
         # `rowId` is the primary key and is create silently
         self.cur.execute(
             """CREATE TABLE rounds (
@@ -381,8 +377,7 @@ class FileHandler:
     def __init__(self: FileHandler, db: Optional[Db] = None) -> None:
         self.db = Db() if db is None else db
 
-    def read_pairings_txt(self: FileHandler, path: str) -> List[Pair]:
-        pairs: List[Pair] = []
+    def read_pairings_txt(self: FileHandler, path: str) -> Iterator[Tuple[int, str, str]]:
         with open(path) as f:
             for line in (line.strip() for line in f if line.strip()):
                 match = PLAYER_REGEX.match(line)
@@ -391,40 +386,35 @@ class FileHandler:
                     continue
                 log.debug(match.groups())
                 table_number = int(match.group("table_number"))
-                player1 = match.group("player1")
-                player2 = match.group("player2")
-                if int(table_number) % 2:  # odd numbers have white player on left
-                    pair = Pair(white_player=player1, black_player=player2)
-                else:
-                    pair = Pair(white_player=player2, black_player=player1)
-                log.debug(pair)
-                pairs.append(pair)
-        return pairs
+                yield (table_number, match.group("player1"),  match.group("player2"))
 
-    def read_pairings_csv(self: FileHandler, path: str) -> List[Pair]:
-        pairs: List[Pair] = []
+    def read_pairings_csv(self: FileHandler, path: str) -> Iterator[Tuple[int, str, str]]:
         with open(path, newline="") as f:
             reader = csv.reader(f, delimiter=CSV_DELIM)
             for row in reader:
                 log.debug(row)
                 table_number, _name1, _elo1, player1, _sep, _name2, _elo2, player2 = row
-                if int(table_number) % 2:  # odd numbers have white player on left
-                    pair = Pair(white_player=player1, black_player=player2)
-                else:
-                    pair = Pair(white_player=player2, black_player=player1)
-                log.debug(pair)
-                pairs.append(pair)
-        return pairs
+                yield int(table_number), player1, player2
 
     def insert(
         self: FileHandler, round_nb: int, path: str, force: bool = False
     ) -> None:
         if path.endswith(".txt"):
-            pairs = self.read_pairings_txt(path)
+            pairs_iter = self.read_pairings_txt(path)
         elif path.endswith(".csv"):
-            pairs = self.read_pairings_csv(path)
+            pairs_iter = self.read_pairings_csv(path)
         else:
             return log.error(f"Unsupported pairings file: {path}. Must be .txt or .csv")
+
+        pairs: List[Pair] = []
+        for table_number, player1, player2 in pairs_iter:
+            player1, player2 = player1.lower(), player2.lower()
+            if table_number % 2:  # odd numbers have white player on left
+                pair = Pair(white_player=player1, black_player=player2)
+            else:
+                pair = Pair(white_player=player2, black_player=player1)
+            log.debug(pair)
+            pairs.append(pair)
 
         existing = set()
         for pair in self.db.get_pairs(round_nb):
@@ -433,7 +423,7 @@ class FileHandler:
         filtered_pairs = [
             pair
             for pair in pairs
-            if not pair.white_player in existing or pair.black_player in existing
+            if not pair.white_player in existing and not pair.black_player in existing
         ]
         if len(filtered_pairs) != len(pairs):
             if force:
@@ -441,7 +431,7 @@ class FileHandler:
             else:
                 log.warning("Skipped inserting players which are already paired:")
                 for pair in set(pairs) - set(filtered_pairs):
-                    log.warning(f"  {pair}")
+                    log.warning(f"{pair.white_player:>30} vs {pair.black_player:<30}")
                 log.warning("Use --force to insert them anyway")
                 pairs = filtered_pairs
 
