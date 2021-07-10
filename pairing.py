@@ -34,7 +34,7 @@ load_dotenv()
 
 
 GAME_SETTINGS: Dict[str, Any] = {
-    "rated": True,
+    "rated": "true",
     "clock.limit": 10 * 60,
     "clock.increment": 2,
 }
@@ -42,7 +42,7 @@ MESSAGE_FN = lambda rnd: f"FIDE Binance, Round {rnd}: Your game is ready: {{game
 START_CLOCKS_AFTER_SECS = 60
 
 ARMAGEDDON_SETTINGS = {
-    "rated": True,
+    "rated": "true",
     "clock.limit": 4 * 60,
     "clock.increment": 0,
     "message": "FIDE Binance, Armageddon: Your game is ready: {game}",
