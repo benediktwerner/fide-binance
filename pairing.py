@@ -32,16 +32,6 @@ from typing import Dict, List, Optional, Tuple, Iterator, Any
 
 load_dotenv()
 
-PLAYER_REGEX = re.compile(
-    r"^(?P<table_number>\d+)\t"
-    + r"[^\t]+\t"  # Name 1
-    + r"\d+\t"  # Elo 1
-    + r"(?P<player1>[a-zA-Z0-9_-]+)\t"
-    + r"[^\t]+\t"  # Score
-    + r"[^\t]+\t"  # Name 2
-    + r"\d+\t"  # Elo 2
-    + r"(?P<player2>[a-zA-Z0-9_-]+)"
-)
 
 GAME_SETTINGS: Dict[str, Any] = {
     "rated": True,
@@ -62,8 +52,12 @@ ARMAGEDDON_ROUND = 1337
 
 
 CSV_DELIM = ";"
-TOKENS_PATH = "tokens.txt"
+COLUMN_TABLE_NUM = 0
+COLUMN_PLAYER1 = 3
+COLUMN_PLAYER2 = 7
 
+
+TOKENS_PATH = "tokens.txt"
 LOG_PATH = "out.log"
 
 BASE = "http://localhost:9663" if __debug__ else "https://lichess.org"
@@ -391,14 +385,15 @@ class FileHandler:
         self: FileHandler, path: str
     ) -> Iterator[Tuple[int, str, str]]:
         with open(path) as f:
-            for line in (line.strip() for line in f if line.strip()):
-                match = PLAYER_REGEX.match(line)
-                if match is None:
-                    log.warning(f"Failed to match line: {line}")
-                    continue
-                log.debug(match.groups())
-                table_number = int(match.group("table_number"))
-                yield (table_number, match.group("player1"), match.group("player2"))
+            for line in filter(bool, (line.strip() for line in f)):
+                try:
+                    row = line.split("\t")
+                    yield int(row[COLUMN_TABLE_NUM]), row[COLUMN_PLAYER1], row[
+                        COLUMN_PLAYER2
+                    ]
+                except Exception:
+                    log.warn(f"Skipped line: {line}")
+                    pass
 
     def read_pairings_csv(
         self: FileHandler, path: str
@@ -407,8 +402,13 @@ class FileHandler:
             reader = csv.reader(f, delimiter=CSV_DELIM)
             for row in reader:
                 log.debug(row)
-                table_number, _name1, _elo1, player1, _sep, _name2, _elo2, player2 = row
-                yield int(table_number), player1, player2
+                try:
+                    yield int(row[COLUMN_TABLE_NUM]), row[COLUMN_PLAYER1], row[
+                        COLUMN_PLAYER2
+                    ]
+                except Exception:
+                    log.warn(f"Skipped row: {row}")
+                    pass
 
     def insert(
         self: FileHandler, round_nb: int, path: str, force: bool = False
