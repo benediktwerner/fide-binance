@@ -14,7 +14,6 @@ import logging.handlers
 import requests
 import os
 import time
-import re
 import sqlite3
 import sys
 
@@ -392,7 +391,7 @@ class FileHandler:
                         COLUMN_PLAYER2
                     ]
                 except Exception:
-                    log.warn(f"Skipped line: {line}")
+                    log.warning(f"Skipped line: {line}")
                     pass
 
     def read_pairings_csv(
@@ -407,7 +406,7 @@ class FileHandler:
                         COLUMN_PLAYER2
                     ]
                 except Exception:
-                    log.warn(f"Skipped row: {row}")
+                    log.warning(f"Skipped row: {row}")
                     pass
 
     def insert(
