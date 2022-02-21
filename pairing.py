@@ -62,12 +62,13 @@ PLAYER_MAP = {
     "Dubov": "SVODMEVKO",
     "Shimanov": "Multibrendovyi",
     "Fedoseev": "Feokl1995",
-    "Grisschuk": "STL_Grischuk",
+    "Grischuk": "STL_Grischuk",
     "Gelfand": "BGRishon",
     "Kramnik": "VB_Kramnik",
     "Bene": "BenWerner",
     "Test": "bentest",
 }
+REVERSE_PLAYER_MAP = {nick.lower(): real for real, nick in PLAYER_MAP.items()}
 PLAYER_MAP = {real.lower(): nick.lower() for real, nick in PLAYER_MAP.items()}
 
 
@@ -238,6 +239,8 @@ class Db:
                 status = f"{status:<12}{result_txt}"
             game_id = game_id or "--------"
             bulk_id = bulk_id or "--------"
+            white = REVERSE_PLAYER_MAP.get(white, white)
+            black = REVERSE_PLAYER_MAP.get(black, black)
             log.info(
                 f"{i+1:>4}|{rowId:<5} {white:>30} vs {black:30} {game_id} {bulk_id} {status}"
             )
@@ -377,6 +380,19 @@ class Db:
             (round_nb,),
         )
         return [x[0] for x in raw_data]
+
+    def get_games(self: Db, round_nb: int) -> List[Tuple[str, str, str]]:
+        raw_data = self.cur.execute(
+            """SELECT 
+                    lichess_game_id,
+                    white_player,
+                    black_player
+                   FROM rounds
+                   WHERE lichess_game_id IS NOT NULL AND round_nb = ?
+                """,
+            (round_nb,),
+        )
+        return list(raw_data)
     
     def get_game_from_id(self: Db, game_id: str) -> Optional[Game]:
         raw_data = self.cur.execute(
@@ -454,7 +470,7 @@ class FileHandler:
         pairs: List[Pair] = []
         for table_number, player1, player2 in pairs_iter:
             player1, player2 = (
-                PLAYER_MAP.get(p.lower(), p.lower()) for p in (player1, player2)
+                PLAYER_MAP[p.lower()] for p in (player1, player2)
             )
             pair = Pair(white_player=player1, black_player=player2)
             log.debug(pair)
@@ -658,7 +674,7 @@ class Pairing:
         log.info(f"Round {round_nb}: {still_unfinished} games still unfinished")
 
     def create_armageddon(self: Pairing, player1: str, player2: str):
-        pair = Pair(*(PLAYER_MAP.get(p.lower(), p.lower()) for p in (player1, player2)))
+        pair = Pair(*(PLAYER_MAP[p.lower()] for p in (player1, player2)))
         token_white = self.tokens.get(pair.white_player)
 
         if token_white is None:
@@ -772,10 +788,12 @@ def broadcast(round_nb: int) -> None:
 def game_urls(round_nb: int) -> None:
     """Return game URLs of the round `round_nb`"""
     log.debug(f"cmd: game_urls {round_nb}")
-    game_ids = Db().get_game_ids(round_nb)
-    log.info(f"Round {round_nb}: {len(game_ids)} games started")
-    for game_id in game_ids:
-        print(f"https://lichess.org/{game_id}")
+    games = Db().get_games(round_nb)
+    log.info(f"Round {round_nb}: {len(games)} games started")
+    for game_id, white, black in games:
+        white = REVERSE_PLAYER_MAP.get(white, white)
+        black = REVERSE_PLAYER_MAP.get(black, black)
+        print(f"{white} - {black}: https://lichess.org/{game_id}")
 
 
 def reset(round_nb: int, force=False) -> None:
