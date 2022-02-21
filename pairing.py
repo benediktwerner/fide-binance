@@ -34,26 +34,41 @@ load_dotenv()
 
 GAME_SETTINGS: Dict[str, Any] = {
     "rated": "true",
-    "clock.limit": 10 * 60,
-    "clock.increment": 2,
+    "clock.limit": 5 * 60,
+    "clock.increment": 3,
 }
 MESSAGE_FN = lambda rnd: f"FIDE Binance, Round {rnd}: Your game is ready: {{game}}"
-START_CLOCKS_AFTER_SECS = 60
+MESSAGE_FN = None
+START_CLOCKS_AFTER_SECS = None  # 60
 
 ARMAGEDDON_SETTINGS = {
     "rated": "true",
-    "clock.limit": 4 * 60,
-    "clock.increment": 0,
-    "message": "FIDE Binance, Armageddon: Your game is ready: {game}",
+    "clock.limit": 5 * 60,
+    "clock.increment": 3,
+    # "message": "FIDE Binance, Armageddon: Your game is ready: {game}",
 }
-ARMAGEDDON_EXTRA_TIME = 1 * 60
+ARMAGEDDON_EXTRA_TIME = 0  # 1 * 60
 ARMAGEDDON_ROUND = 1337
 
 
 CSV_DELIM = ";"
 COLUMN_TABLE_NUM = 0
-COLUMN_PLAYER1 = 3
-COLUMN_PLAYER2 = 7
+COLUMN_PLAYER1 = 1
+COLUMN_PLAYER2 = 2
+
+PLAYER_MAP = {
+    "Karjakin": "Sergey_Karjakin",
+    "Svidler": "Moose959",
+    "Dubov": "SVODMEVKO",
+    "Shimanov": "Multibrendovyi",
+    "Fedoseev": "Feokl1995",
+    "Grisschuk": "STL_Grischuk",
+    "Gelfand": "BGRishon",
+    "Kramnik": "VB_Kramnik",
+    "Bene": "BenWerner",
+    "Test": "bentest",
+}
+PLAYER_MAP = {real.lower(): nick.lower() for real, nick in PLAYER_MAP.items()}
 
 
 TOKENS_PATH = "tokens.txt"
@@ -62,7 +77,7 @@ LOG_PATH = "out.log"
 BASE = "http://localhost:9663" if __debug__ else "https://lichess.org"
 BULK_CREATE_API = BASE + "/api/bulk-pairing"
 BULK_START_CLOCKS_API = BASE + "/api/bulk-pairing/{}/start-clocks"
-CHALLENGE_API = BASE + "/api/challenge/admin/{}/{}"
+CHALLENGE_API = BASE + "/api/challenge/{}"
 CHALLENGE_START_CLOCKS_API = BASE + "/api/challenge/{}/start-clocks"
 ADD_TIME_API = BASE + "/api/round/{}/add-time/{}"
 LOOKUP_API = BASE + "/games/export/_ids"
@@ -362,6 +377,23 @@ class Db:
             (round_nb,),
         )
         return [x[0] for x in raw_data]
+    
+    def get_game_from_id(self: Db, game_id: str) -> Optional[Game]:
+        raw_data = self.cur.execute(
+            """SELECT 
+                    round_nb,
+                    white_player,
+                    black_player,
+                    bulk_id
+                   FROM rounds
+                   WHERE lichess_game_id IS ?
+            """,
+            (game_id,)
+        )
+        if raw_data:
+            round_nb, white, black, bulk_id = next(raw_data)
+            return Game(round_nb, Pair(white, black), game_id, bulk_id)
+        return None
 
     def update_game_status(
         self: Db, game_id: str, status: str, result: Optional[GameResult]
@@ -421,11 +453,10 @@ class FileHandler:
 
         pairs: List[Pair] = []
         for table_number, player1, player2 in pairs_iter:
-            player1, player2 = player1.lower(), player2.lower()
-            if table_number % 2:  # odd numbers have white player on left
-                pair = Pair(white_player=player1, black_player=player2)
-            else:
-                pair = Pair(white_player=player2, black_player=player1)
+            player1, player2 = (
+                PLAYER_MAP.get(p.lower(), p.lower()) for p in (player1, player2)
+            )
+            pair = Pair(white_player=player1, black_player=player2)
             log.debug(pair)
             pairs.append(pair)
 
@@ -512,7 +543,8 @@ class Pairing:
 
         now = int(time.time()) * 1000
         data = GAME_SETTINGS.copy()
-        data["message"] = MESSAGE_FN(round_nb)
+        if MESSAGE_FN is not None:
+            data["message"] = MESSAGE_FN(round_nb)
         data["players"] = ",".join(players)
         data["pairAt"] = now
         if START_CLOCKS_AFTER_SECS is not None:
@@ -540,9 +572,15 @@ class Pairing:
         self: Pairing, round_nb: int, pair: Pair, settings: Dict[str, Any]
     ) -> Optional[str]:
         """Returns the lichess game id on success or None on failure"""
-        url = CHALLENGE_API.format(pair.white_player, pair.black_player)
+        tokens = self.tokens.get_tokens(pair)
+        if not tokens:
+            return None
+        url = CHALLENGE_API.format(pair.black_player)
         settings["color"] = "white"
-        rep = self.http.post(url, data=settings, headers=HEADERS)
+        settings["acceptByToken"] = tokens[1]
+        rep = self.http.post(
+            url, data=settings, headers={"Authorization": f"Bearer {tokens[0]}"}
+        )
 
         if not check_response(rep, f"Failed to create game: {pair}"):
             return None
@@ -560,7 +598,8 @@ class Pairing:
 
         for pair in unpaired:
             settings = GAME_SETTINGS.copy()
-            settings["message"] = MESSAGE_FN(round_nb)
+            if MESSAGE_FN is not None:
+                settings["message"] = MESSAGE_FN(round_nb)
             if self.create_game(round_nb, pair, settings) is not None:
                 count += 1
 
@@ -619,7 +658,7 @@ class Pairing:
         log.info(f"Round {round_nb}: {still_unfinished} games still unfinished")
 
     def create_armageddon(self: Pairing, player1: str, player2: str):
-        pair = Pair(player1.lower(), player2.lower())
+        pair = Pair(*(PLAYER_MAP.get(p.lower(), p.lower()) for p in (player1, player2)))
         token_white = self.tokens.get(pair.white_player)
 
         if token_white is None:
@@ -632,15 +671,15 @@ class Pairing:
         if game_id is None:
             return
 
-        log.info(f"Created armageddon: {game_id}")
+        log.info(f"Created armageddon: https://lichess.org/{game_id}")
 
-        rep = self.http.post(
-            ADD_TIME_API.format(game_id, ARMAGEDDON_EXTRA_TIME),
-            headers={"Authorization": f"Bearer {token_white}"},
-        )
-
-        check_response(rep, "Failed to add time for armageddon")
-
+        if ARMAGEDDON_EXTRA_TIME > 0:
+            rep = self.http.post(
+                ADD_TIME_API.format(game_id, ARMAGEDDON_EXTRA_TIME),
+                headers={"Authorization": f"Bearer {token_white}"},
+            )
+            check_response(rep, "Failed to add time for armageddon")
+    
     def test(self: Pairing) -> None:
         pass
 
@@ -697,6 +736,17 @@ def start_clocks(round_nb: int) -> None:
     Pairing().start_clocks(round_nb)
 
 
+def start_clock(game_id: str) -> None:
+    """Start the clock for a single game"""
+    log.debug(f"cmd: start_clock {game_id}")
+    db = Db()
+    game = db.get_game_from_id(game_id)
+    if not game:
+        log.error(f"No game with id {game_id}")
+        return
+    Pairing(db).start_clock(game)
+
+
 def create_armageddon(player1: str, player2: str) -> None:
     """Start an armageddon game between two players"""
     log.debug(f"cmd: create_armageddon {player1} {player2}")
@@ -717,6 +767,15 @@ def broadcast(round_nb: int) -> None:
     game_ids = Db().get_game_ids(round_nb)
     log.info(f"Round {round_nb}: {len(game_ids)} games started")
     log.info(f"Game ids: {' '.join(game_ids)}")
+
+
+def game_urls(round_nb: int) -> None:
+    """Return game URLs of the round `round_nb`"""
+    log.debug(f"cmd: game_urls {round_nb}")
+    game_ids = Db().get_game_ids(round_nb)
+    log.info(f"Round {round_nb}: {len(game_ids)} games started")
+    for game_id in game_ids:
+        print(f"https://lichess.org/{game_id}")
 
 
 def reset(round_nb: int, force=False) -> None:
@@ -741,6 +800,7 @@ def main() -> None:
         "create_games_single": create_games_single,
         "results": results,
         "broadcast": broadcast,
+        "game_urls": game_urls,
         "reset": reset,
         "start_clocks": start_clocks,
     }
@@ -777,6 +837,12 @@ def main() -> None:
         dest="force",
         action="store_true",
         help="Also insert pairings with players that already have one",
+    )
+
+    p = subparsers.add_parser("start_clock", help=start_clock.__doc__)
+    p.set_defaults(func=start_clock)
+    p.add_argument(
+        "game_id", metavar="GAME_ID", help="ID of the game to start clocks for",
     )
 
     p = subparsers.add_parser("create_armageddon", help=create_armageddon.__doc__)
