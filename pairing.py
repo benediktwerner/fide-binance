@@ -23,7 +23,7 @@ from enum import IntEnum
 from requests import Response
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
-from typing import Dict, List, Optional, Tuple, Iterator, Any
+from typing import Callable, Dict, List, Optional, Tuple, Iterator, Any
 
 #############
 # Constants #
@@ -34,12 +34,20 @@ load_dotenv()
 
 GAME_SETTINGS: Dict[str, Any] = {
     "rated": "true",
-    "clock.limit": 5 * 60,
-    "clock.increment": 3,
+    "clock.limit": 5 * 60,  # starting time in seconds
+    "clock.increment": 3,  # increment in seconds
+    "variant": "chess960",
+    "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+    # Leave out to get the default message: Your game with {opponent} is ready: {game}.
+    # Must contain {game} which will be replaced with the game link. Can also contain {player} and {opponent}.
+    # "message": "Your game for X tournament is ready: {game}"
 }
-MESSAGE_FN = lambda rnd: f"FIDE Binance, Round {rnd}: Your game is ready: {{game}}"
-MESSAGE_FN = None
-START_CLOCKS_AFTER_SECS = None  # 60
+
+# Only works with the bulk API. You can always manually start clocks though.
+START_CLOCKS_AFTER_SECS = None
+
+MESSAGE_FN: Optional[Callable[[int], str]] = None
+# MESSAGE_FN = lambda rnd: f"FIDE Binance, Round {rnd}: Your game is ready: {{game}}"
 
 ARMAGEDDON_SETTINGS = {
     "rated": "true",
@@ -47,14 +55,13 @@ ARMAGEDDON_SETTINGS = {
     "clock.increment": 3,
     # "message": "FIDE Binance, Armageddon: Your game is ready: {game}",
 }
-ARMAGEDDON_EXTRA_TIME = 0  # 1 * 60
+ARMAGEDDON_EXTRA_TIME = 0  # in seconds for black
 ARMAGEDDON_ROUND = 1337
 
 
 CSV_DELIM = ";"
-COLUMN_TABLE_NUM = 0
-COLUMN_PLAYER1 = 1
-COLUMN_PLAYER2 = 2
+COLUMN_PLAYER1 = 0
+COLUMN_PLAYER2 = 1
 
 PLAYER_MAP = {
     "Karjakin": "Sergey_Karjakin",
@@ -68,8 +75,12 @@ PLAYER_MAP = {
     "Bene": "BenWerner",
     "Test": "bentest",
 }
-REVERSE_PLAYER_MAP = {nick.lower(): real for real, nick in PLAYER_MAP.items()}
-PLAYER_MAP = {real.lower(): nick.lower() for real, nick in PLAYER_MAP.items()}
+# PLAYER_MAP = None
+if PLAYER_MAP:
+    REVERSE_PLAYER_MAP = {nick.lower(): real for real, nick in PLAYER_MAP.items()}
+    PLAYER_MAP = {real.lower(): nick.lower() for real, nick in PLAYER_MAP.items()}
+else:
+    REVERSE_PLAYER_MAP = {}
 
 
 TOKENS_PATH = "tokens.txt"
@@ -80,14 +91,18 @@ BULK_CREATE_API = BASE + "/api/bulk-pairing"
 BULK_START_CLOCKS_API = BASE + "/api/bulk-pairing/{}/start-clocks"
 CHALLENGE_API = BASE + "/api/challenge/{}"
 CHALLENGE_START_CLOCKS_API = BASE + "/api/challenge/{}/start-clocks"
+CHALLENGE_TOKENS_API = BASE + "/api/token/admin-challenge"
+TOKEN_TEST_API = BASE + "/api/token/test"
 ADD_TIME_API = BASE + "/api/round/{}/add-time/{}"
 LOOKUP_API = BASE + "/games/export/_ids"
 DB_FILE = "FIDE_binance_test.db" if __debug__ else "FIDE_binance_prod.db"
 
 HEADERS = {
-    "Authorization": f"Bearer {os.getenv('TOKEN_TEST' if __debug__ else 'TOKEN_PROD')}",
     "Accept": "application/x-ndjson",
 }
+TOKEN = os.getenv("TOKEN_TEST" if __debug__ else "TOKEN_PROD")
+if TOKEN:
+    HEADERS["Authorization"] = f"Bearer {TOKEN}"
 
 RETRY_STRAT = Retry(
     total=3,
@@ -128,6 +143,16 @@ logging.getLogger().addHandler(handler_2)
 ###########
 # Classes #
 ###########
+
+
+def get_player(name: str) -> str:
+    if PLAYER_MAP:
+        username = PLAYER_MAP.get(name.lower())
+        if not username:
+            log.error(f"Unknown player name: {name}")
+            exit(1)
+        return username
+    return name.lower()
 
 
 @dataclass(frozen=True)
@@ -245,7 +270,7 @@ class Db:
                 f"{i+1:>4}|{rowId:<5} {white:>30} vs {black:30} {game_id} {bulk_id} {status}"
             )
 
-    def remove_round(self: Db, round_nb: int, force=False) -> None:
+    def remove_round(self: Db, round_nb: int, force: bool = False) -> None:
         force_select = "" if force else "AND lichess_game_id is NULL"
         self.cur.execute(
             f"""DELETE FROM rounds
@@ -393,7 +418,7 @@ class Db:
             (round_nb,),
         )
         return list(raw_data)
-    
+
     def get_game_from_id(self: Db, game_id: str) -> Optional[Game]:
         raw_data = self.cur.execute(
             """SELECT 
@@ -404,7 +429,7 @@ class Db:
                    FROM rounds
                    WHERE lichess_game_id IS ?
             """,
-            (game_id,)
+            (game_id,),
         )
         if raw_data:
             round_nb, white, black, bulk_id = next(raw_data)
@@ -428,31 +453,23 @@ class FileHandler:
     def __init__(self: FileHandler, db: Optional[Db] = None) -> None:
         self.db = Db() if db is None else db
 
-    def read_pairings_txt(
-        self: FileHandler, path: str
-    ) -> Iterator[Tuple[int, str, str]]:
+    def read_pairings_txt(self: FileHandler, path: str) -> Iterator[Tuple[str, str]]:
         with open(path) as f:
             for line in filter(bool, (line.strip() for line in f)):
                 try:
-                    row = line.split("\t")
-                    yield int(row[COLUMN_TABLE_NUM]), row[COLUMN_PLAYER1], row[
-                        COLUMN_PLAYER2
-                    ]
+                    row = line.split()
+                    yield row[COLUMN_PLAYER1], row[COLUMN_PLAYER2]
                 except Exception:
                     log.warning(f"Skipped line: {line}")
                     pass
 
-    def read_pairings_csv(
-        self: FileHandler, path: str
-    ) -> Iterator[Tuple[int, str, str]]:
+    def read_pairings_csv(self: FileHandler, path: str) -> Iterator[Tuple[str, str]]:
         with open(path, newline="") as f:
             reader = csv.reader(f, delimiter=CSV_DELIM)
             for row in reader:
                 log.debug(row)
                 try:
-                    yield int(row[COLUMN_TABLE_NUM]), row[COLUMN_PLAYER1], row[
-                        COLUMN_PLAYER2
-                    ]
+                    yield row[COLUMN_PLAYER1], row[COLUMN_PLAYER2]
                 except Exception:
                     log.warning(f"Skipped row: {row}")
                     pass
@@ -468,10 +485,8 @@ class FileHandler:
             return log.error(f"Unsupported pairings file: {path}. Must be .txt or .csv")
 
         pairs: List[Pair] = []
-        for table_number, player1, player2 in pairs_iter:
-            player1, player2 = (
-                PLAYER_MAP[p.lower()] for p in (player1, player2)
-            )
+        for player1, player2 in pairs_iter:
+            player1, player2 = map(get_player, (player1, player2))
             pair = Pair(white_player=player1, black_player=player2)
             log.debug(pair)
             pairs.append(pair)
@@ -519,7 +534,7 @@ class Tokens:
         self.tokens: Dict[str, str] = {}
         with open(TOKENS_PATH) as f:
             for line in f:
-                name, token = (x.strip() for x in line.split(":"))
+                name, token = map(str.strip, line.split(":"))
                 self.tokens[name.lower()] = token
 
     def get(self: Tokens, player: str) -> Optional[str]:
@@ -535,6 +550,17 @@ class Tokens:
             log.error(f"No token for: {pair.black_player}")
             return None
         return t1, t2
+
+    def insert(self, tokens: Dict[str, str]) -> None:
+        for name, token in tokens.items():
+            self.tokens[name.lower()] = token
+
+    def save(self) -> None:
+        longest = max(map(len, self.tokens))
+        with open(TOKENS_PATH, "w") as f:
+            for name, token in sorted(self.tokens.items()):
+                name += " " * (len(name) - longest + 1)
+                f.write(f"{name}: {token}\n")
 
 
 class Pairing:
@@ -673,8 +699,8 @@ class Pairing:
         still_unfinished = len(self.db.get_unfinished_games(round_nb))
         log.info(f"Round {round_nb}: {still_unfinished} games still unfinished")
 
-    def create_armageddon(self: Pairing, player1: str, player2: str):
-        pair = Pair(*(PLAYER_MAP[p.lower()] for p in (player1, player2)))
+    def create_armageddon(self: Pairing, player1: str, player2: str) -> None:
+        pair = Pair(*map(get_player, (player1, player2)))
         token_white = self.tokens.get(pair.white_player)
 
         if token_white is None:
@@ -695,7 +721,78 @@ class Pairing:
                 headers={"Authorization": f"Bearer {token_white}"},
             )
             check_response(rep, "Failed to add time for armageddon")
-    
+
+    def ensure_tokens(self, round_nb: int, create: Optional[str]) -> None:
+        players = set()
+        for pair in self.db.get_pairs(round_nb):
+            players.add(pair.white_player)
+            players.add(pair.black_player)
+
+        missing = set()
+        tokens = {}
+        for p in players:
+            token = self.tokens.get(p)
+            if token is None:
+                missing.add(p)
+            else:
+                tokens[token] = p
+
+        logfn = log.error if create is None else log.info
+        if missing:
+            logfn("Missing tokens for:")
+            for p in sorted(missing):
+                logfn(p)
+
+        now = int(time.time()) * 1000 + 24 * 60 * 60 + 1000
+        resp = self.http.post(TOKEN_TEST_API, data=",".join(tokens.keys()))
+        if check_response(resp, "Failed to validate tokens"):
+            for token, data in resp.json().items():
+                user = tokens[token]
+                if data is None:
+                    logfn(f"Bad token for {user}.")
+                    missing.add(user)
+                elif data["userId"] != user:
+                    logfn(f"Token for {user} is actually for another user.")
+                    missing.add(user)
+                elif "challenge:write" not in data["scopes"]:
+                    logfn(f"Missing 'challenge:write' scope for {user}.")
+                    missing.add(user)
+                elif data["expires"] < now:
+                    logfn(f"Token for {user} is expired.")
+                    missing.add(user)
+
+        if not missing:
+            log.info("All tokens present")
+            return
+
+        if create is None:
+            return
+
+        if len(create) < 10:
+            log.error(
+                "Please provide a proper description for the token (at least 10 characters)"
+            )
+            return
+
+        if "Authorization" not in HEADERS:
+            log.error("No appropriate token in .env file")
+            return
+
+        log.info("Creating tokens...")
+        resp = self.http.post(
+            CHALLENGE_TOKENS_API,
+            headers=HEADERS,
+            data={"users": ",".join(missing), "description": create},
+        )
+        if not check_response(resp, "Failed to create tokens"):
+            return
+
+        result = resp.json()
+        self.tokens.insert(result)
+        self.tokens.save()
+
+        log.info("Created tokens.")
+
     def test(self: Pairing) -> None:
         pass
 
@@ -796,10 +893,16 @@ def game_urls(round_nb: int) -> None:
         print(f"{white} - {black}: https://lichess.org/{game_id}")
 
 
-def reset(round_nb: int, force=False) -> None:
-    """Reset a round by removing all its pairings. Use `force` to remove pairings with created games."""
+def reset(round_nb: int, force: bool = False) -> None:
+    """Reset a round by removing all its pairings. Use `--force` to remove pairings with created games."""
     log.debug(f"cmd: reset {round_nb} force={force}")
     Db().remove_round(round_nb, force)
+
+
+def ensure_tokens(round_nb: int, create: Optional[str] = None) -> None:
+    """Ensure tokens for all players in the round are present. Use `--create "Token Description"` to create missing tokens via the Challenge Admin API."""
+    log.debug(f"cmd: ensure_tokens {round_nb} create={create}")
+    Pairing().ensure_tokens(round_nb, create)
 
 
 def main() -> None:
@@ -821,6 +924,7 @@ def main() -> None:
         "game_urls": game_urls,
         "reset": reset,
         "start_clocks": start_clocks,
+        "ensure_tokens": ensure_tokens,
     }
 
     for name, fn in BASIC_COMMANDS.items():
@@ -855,6 +959,15 @@ def main() -> None:
         dest="force",
         action="store_true",
         help="Also insert pairings with players that already have one",
+    )
+
+    subparsers.choices["ensure_tokens"].add_argument(
+        "-c",
+        "--create",
+        dest="create",
+        metavar="DESCRIPTION",
+        type=str,
+        help="Create missing tokens via Challenge Admin API. Pass token description as argument.",
     )
 
     p = subparsers.add_parser("start_clock", help=start_clock.__doc__)
