@@ -2,8 +2,11 @@
 
 ## Setup
 
-1. Have a recent version of Python installed
-2. *Optional:* Create a venv and activate it: `python3 -m venv venv && source venv/bin/activate` 
+1. Have a recent version of Python installed (on Windows, just run `python` in the cmd to open the Microsoft Store and install it from there)
+2. *Optional:* Create a venv: `python3 -m venv venv` and activate it
+   - On Unix: `source venv/bin/activate`
+   - On Windows: `.\venv\Scripts\activate.bat`
+   - You should now see `(venv)` at the start of your command prompt
 3. Run `pip install -r requirements.txt`
 4. *If using the Bulk or Challenge Admin API:* Copy `.env.example` to `.env` and replace the example tokens
 5. Edit `PLAYER_MAP` in `pairing.py`:
@@ -14,7 +17,7 @@
 ## Usage
 
 By default, the script will run against a local Lichess instance and with `TOKEN_TEST`.
-Run as `python3 -O pairing.py` to run against Lichess proper and with `TOKEN_PROD`.
+Run as `python -O pairing.py` to run against Lichess proper and with `TOKEN_PROD`.
 
 To adjust game settings, modify the `GAME_SETTINGS` dictionary near the top of `pairing.py`.
 
