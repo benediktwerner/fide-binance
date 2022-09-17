@@ -743,23 +743,24 @@ class Pairing:
             for p in sorted(missing):
                 logfn(p)
 
-        now = int(time.time()) * 1000 + 24 * 60 * 60 + 1000
-        resp = self.http.post(TOKEN_TEST_API, data=",".join(tokens.keys()))
-        if check_response(resp, "Failed to validate tokens"):
-            for token, data in resp.json().items():
-                user = tokens[token]
-                if data is None:
-                    logfn(f"Bad token for {user}.")
-                    missing.add(user)
-                elif data["userId"] != user:
-                    logfn(f"Token for {user} is actually for another user.")
-                    missing.add(user)
-                elif "challenge:write" not in data["scopes"]:
-                    logfn(f"Missing 'challenge:write' scope for {user}.")
-                    missing.add(user)
-                elif data["expires"] < now:
-                    logfn(f"Token for {user} is expired.")
-                    missing.add(user)
+        if tokens:
+            now = int(time.time()) * 1000 + 24 * 60 * 60 + 1000
+            resp = self.http.post(TOKEN_TEST_API, data=",".join(tokens.keys()))
+            if check_response(resp, "Failed to validate tokens"):
+                for token, data in resp.json().items():
+                    user = tokens[token]
+                    if data is None:
+                        logfn(f"Bad token for {user}.")
+                        missing.add(user)
+                    elif data["userId"] != user:
+                        logfn(f"Token for {user} is actually for another user.")
+                        missing.add(user)
+                    elif "challenge:write" not in data["scopes"]:
+                        logfn(f"Missing 'challenge:write' scope for {user}.")
+                        missing.add(user)
+                    elif data["expires"] < now:
+                        logfn(f"Token for {user} is expired.")
+                        missing.add(user)
 
         if not missing:
             log.info("All tokens present")
